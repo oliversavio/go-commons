@@ -6,58 +6,61 @@ import (
 	"sync"
 )
 
-// Read-Through Cache
 type Cache struct {
-	store    map[string]*list.Element
-	mx       sync.RWMutex
-	l        *list.List
-	capacity int
+	store map[string]*list.Element
+	mu    sync.RWMutex
+	items *list.List
+	size  uint32
 }
 
 type kv struct {
-	key   string
-	value interface{}
+	K string
+	V interface{}
 }
 
 var ErrCacheMiss = errors.New("cache miss")
 
-func (c *Cache) Get(key string) (interface{}, error) {
-	c.mx.RLock()
-	defer c.mx.RUnlock()
+func (c *Cache) Put(key string, value interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	if elem, ok := c.store[key]; ok {
+		c.items.Remove(elem)
+	}
+	elem := c.items.PushFront(&kv{
+		K: key,
+		V: value,
+	})
+	c.store[key] = elem
+	c.limitCacheSize()
+}
+
+func (c *Cache) Get(key string) (interface{}, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	elem, ok := c.store[key]
 	if !ok {
 		return nil, ErrCacheMiss
 	}
-	val := elem.Value.(*kv).value
-	return val, nil
+
+	return elem.Value.(*kv).V, nil
 }
 
-func (c *Cache) Put(key string, value interface{}) error {
-	c.mx.Lock()
-	defer c.mx.Unlock()
-	var elem *list.Element
-	if elem, ok := c.store[key]; ok {
-		c.l.Remove(elem)
-	}
-	elem = c.l.PushFront(&kv{key: key, value: value})
-	c.store[key] = elem
+func (c *Cache) limitCacheSize() {
+	if c.items.Len() > int(c.size) {
+		last := c.items.Back()
+		lkey := last.Value.(*kv).K
 
-	if c.l.Len() > c.capacity {
-		back := c.l.Back()
-		k := back.Value.(*kv).key
-		delete(c.store, k)
-		c.l.Remove(back)
+		c.items.Remove(last)
+		delete(c.store, lkey)
 	}
-
-	return nil
 }
 
 func NewCache(size int) *Cache {
 	return &Cache{
-		store:    map[string]*list.Element{},
-		mx:       sync.RWMutex{},
-		l:        list.New(),
-		capacity: size,
+		store: map[string]*list.Element{},
+		mu:    sync.RWMutex{},
+		items: list.New(),
+		size:  uint32(size),
 	}
 }
